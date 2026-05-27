@@ -438,3 +438,46 @@ func (*markerConn) RemoteAddr() net.Addr { return nil }
 func (*markerConn) SetDeadline(t time.Time) error      { return nil }
 func (*markerConn) SetReadDeadline(t time.Time) error  { return nil }
 func (*markerConn) SetWriteDeadline(t time.Time) error { return nil }
+
+// TestServerAuthSourceAddressCriticalOption is the v0.30.0 analog of the
+// upstream CVE-2026-46595 regression test. Upstream exercises the bypass via
+// VerifiedPublicKeyCallback, which does not exist in this release; here a
+// non-publickey callback (PasswordCallback) returns Permissions carrying a
+// mismatching source-address critical option. Before the fix the restriction
+// was only validated in the publickey path and was silently skipped, so the
+// client would log in. After the fix the option is enforced on the resolved
+// permissions regardless of the authenticating method and the login fails.
+func TestServerAuthSourceAddressCriticalOption(t *testing.T) {
+	c1, c2, err := netPipe()
+	if err != nil {
+		t.Fatalf("netPipe: %v", err)
+	}
+	defer c1.Close()
+	defer c2.Close()
+
+	serverConf := &ServerConfig{
+		PasswordCallback: func(conn ConnMetadata, password []byte) (*Permissions, error) {
+			return &Permissions{
+				CriticalOptions: map[string]string{
+					sourceAddressCriticalOption: "192.168.99.99",
+				},
+			}, nil
+		},
+	}
+	serverConf.AddHostKey(testSigners["rsa"])
+
+	clientConf := ClientConfig{
+		User: "user",
+		Auth: []AuthMethod{
+			Password("password"),
+		},
+		HostKeyCallback: InsecureIgnoreHostKey(),
+	}
+
+	go NewServerConn(c1, serverConf)
+
+	_, _, _, err = NewClientConn(c2, "", &clientConf)
+	if err == nil {
+		t.Fatal("client login succeeded despite a mismatching source-address critical option")
+	}
+}

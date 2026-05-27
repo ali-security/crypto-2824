@@ -755,6 +755,20 @@ userAuthLoop:
 			authErr = fmt.Errorf("ssh: unknown method %q", userAuthReq.Method)
 		}
 
+		// CVE-2026-46595: enforce the source-address critical option on the
+		// permissions that will actually be applied to the connection,
+		// regardless of which authentication method produced them. The
+		// publickey path already validates it when PublicKeyCallback returns
+		// the option, but other callbacks can set it too; re-checking here
+		// ensures the restriction can never be silently skipped.
+		if authErr == nil && perms != nil && perms.CriticalOptions != nil {
+			if sourceAddr := perms.CriticalOptions[sourceAddressCriticalOption]; sourceAddr != "" {
+				if err := checkSourceAddress(s.RemoteAddr(), sourceAddr); err != nil {
+					authErr = err
+				}
+			}
+		}
+
 		authErrs = append(authErrs, authErr)
 
 		if config.AuthLogCallback != nil {
